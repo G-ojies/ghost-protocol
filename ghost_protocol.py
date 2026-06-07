@@ -55,6 +55,15 @@ SKILL_KEYWORDS = [
 # Listing types to pursue
 TARGET_TYPES = ["bounty", "project", "hackathon"]
 
+# Regions the operator is eligible to submit from. Superteam runs region-locked
+# listings (e.g. "Poland only") alongside "Global" ones; submitting to a region
+# you're not in wastes effort. Override via GHOST_REGIONS (comma-separated).
+ELIGIBLE_REGIONS = {
+    r.strip().lower()
+    for r in os.getenv("GHOST_REGIONS", "global,nigeria").split(",")
+    if r.strip()
+}
+
 # ─── LOGGING ──────────────────────────────────────────────────────────────────
 
 logging.basicConfig(
@@ -201,6 +210,23 @@ def fetch_public_listings(take: int = 50) -> list[dict]:
     if listings:
         log.info(f"📋 Found {len(listings)} public listings")
     return listings or []
+
+def listing_region(listing: dict) -> str:
+    """Return a listing's region ('Global', 'Nigeria', 'Poland', …).
+
+    The list endpoints omit region, so fall back to the public details endpoint.
+    Returns "" if it can't be determined.
+    """
+    if listing.get("region"):
+        return listing["region"]
+    slug = listing.get("slug")
+    if not slug:
+        return ""
+    details = _request("GET", f"/api/listings/details/{slug}",
+                       headers={"Content-Type": "application/json"})
+    if isinstance(details, dict):
+        return details.get("region", "") or ""
+    return ""
 
 def safe_str(val) -> str:
     """Convert any value to a flat string for keyword matching."""
@@ -511,7 +537,22 @@ def watch(min_score: int = 2, public: bool = True) -> list[dict]:
         seen.add(lid)
         deduped.append(l)
 
-    open_matches = filter_listings(deduped, min_score=min_score) if deduped else []
+    matched = filter_listings(deduped, min_score=min_score) if deduped else []
+
+    # Drop region-locked listings the operator can't submit to (keeps Global +
+    # any GHOST_REGIONS). Requires a per-candidate details lookup for region.
+    open_matches = []
+    region_skipped = 0
+    for l in matched:
+        region = listing_region(l)
+        l["_region"] = region or "?"
+        if ELIGIBLE_REGIONS and region and region.lower() not in ELIGIBLE_REGIONS:
+            region_skipped += 1
+            continue
+        open_matches.append(l)
+    if region_skipped:
+        log.info(f"⏭️  Skipped {region_skipped} region-locked listing(s) "
+                 f"(eligible: {sorted(ELIGIBLE_REGIONS)})")
 
     if open_matches:
         print(f"GHOST_WATCH: {len(open_matches)} OPEN skill-matched listing(s) found 🔔")
@@ -519,7 +560,8 @@ def watch(min_score: int = 2, public: bool = True) -> list[dict]:
         for l in open_matches:
             print(f"  • [{l.get('_skillScore', score_listing(l))}] "
                   f"{l.get('title', 'Untitled')} — {l.get('rewardAmount')} {l.get('token', '')} "
-                  f"| {l.get('_source', '?')} | slug={l.get('slug')} | deadline={l.get('deadline')}")
+                  f"| {l.get('_source', '?')} | {l.get('_region', '?')} "
+                  f"| slug={l.get('slug')} | deadline={l.get('deadline')}")
     else:
         print("GHOST_WATCH: 0 open listings (nothing to submit to right now).")
     return open_matches
