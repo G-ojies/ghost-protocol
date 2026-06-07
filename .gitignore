@@ -1,0 +1,15 @@
+# Secrets — never commit credentials
+.env
+ghost_creds.json
+
+# Scan output (regenerated)
+ghost_listings.json
+
+# Runtime logs
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
