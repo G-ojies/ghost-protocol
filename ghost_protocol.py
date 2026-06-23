@@ -55,6 +55,28 @@ SKILL_KEYWORDS = [
 # Listing types to pursue
 TARGET_TYPES = ["bounty", "project", "hackathon"]
 
+# Role keywords that mark a listing as NON-code (marketing, design, content,
+# community, ops, …). Ghost Protocol's only deliverable is a code/repo link, so
+# these roles are a fundamental mismatch even when the listing's description
+# name-drops "solana"/"crypto". Matched against the title + skill tags only —
+# not the free-text description, which mentions the tech stack regardless of role.
+NON_CODE_KEYWORDS = [
+    "marketer", "marketing", "growth", "content writer", "content creator",
+    "copywriter", "writer", "social media", "community manager",
+    "community lead", "community", "designer", "graphic design", "ui/ux design",
+    "video editor", "videographer", "translator", "translation",
+    "ambassador", "business development", "sales", "moderator", "kol",
+]
+
+# Engineering signals that override a non-code keyword — a hybrid role like
+# "designer who can build the React frontend" still has a code deliverable, so
+# we keep it for human review rather than dropping it.
+CODE_ROLE_KEYWORDS = [
+    "developer", "engineer", "rust", "anchor", "smart contract", "program",
+    "frontend", "backend", "full-stack", "fullstack", "sdk", "integrate",
+    "integration", "indexer", "dapp", "api", "build the", "implement",
+]
+
 # Regions the operator is eligible to submit from. Superteam runs region-locked
 # listings (e.g. "Poland only") alongside "Global" ones; submitting to a region
 # you're not in wastes effort. Override via GHOST_REGIONS (comma-separated).
@@ -251,6 +273,27 @@ def score_listing(listing: dict) -> int:
             score += 1
     return score
 
+def is_code_listing(listing: dict) -> bool:
+    """True if the listing plausibly has a code/engineering deliverable.
+
+    Ghost Protocol only submits code/repo links, so a listing whose *role* is
+    non-technical (growth marketing, design, content, community, …) is a
+    mismatch even when its description mentions "solana"/"crypto". The role is
+    judged from the title and skill tags — not the description, which name-drops
+    the tech stack regardless of role.
+
+    A non-code role keyword is overridden when an engineering signal is also
+    present (hybrid "design & build the frontend" roles keep a code deliverable),
+    so those are kept for human review rather than dropped.
+    """
+    role_text = " ".join([
+        safe_str(listing.get("title", "")),
+        safe_str(listing.get("skills", "")),
+    ]).lower()
+    has_non_code = any(kw in role_text for kw in NON_CODE_KEYWORDS)
+    has_code = any(kw in role_text for kw in CODE_ROLE_KEYWORDS)
+    return has_code or not has_non_code
+
 def is_past_deadline(listing: dict) -> bool:
     """True if the listing's deadline has elapsed.
 
@@ -272,8 +315,14 @@ def filter_listings(listings: list[dict], min_score: int = 1) -> list[dict]:
     scored = []
     closed = 0
     expired = 0
+    non_code = 0
     for l in listings:
         if l.get("type") not in TARGET_TYPES:
+            continue
+        # Skip non-code roles (marketing/design/content/…) — Ghost Protocol has
+        # no deliverable for them, so a keyword match on the description is noise.
+        if not is_code_listing(l):
+            non_code += 1
             continue
         # Skip listings where submissions are closed
         if l.get("isSubmissionClosed") or l.get("status") == "CLOSED":
@@ -286,6 +335,9 @@ def filter_listings(listings: list[dict], min_score: int = 1) -> list[dict]:
         s = score_listing(l)
         if s >= min_score:
             scored.append((s, l))
+    if non_code:
+        log.info(f"⏭️  Skipped {non_code} non-code listing(s) "
+                 f"(marketing/design/content/community/etc.)")
     if closed:
         log.info(f"⏭️  Skipped {closed} listings with closed submissions")
     if expired:

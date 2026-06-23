@@ -13,3 +13,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Runtime lock (not source)
+.claude/scheduled_tasks.lock
